@@ -1,318 +1,145 @@
-### Stubs, Mocks, Spies and Fakes
-(Nothing is real anymore)
+### @color[orange](Jenkinsfile) - What, why, where, how
+(you too can write pipeline code!)
 
 ---
 
-### TIL:
+### TIL (Background info):
 
-- Stubs
-- Mocks
-- Spies
-- Fakes
-- When, how and why to use either
-
----
-
-### Background
-
-+++?code=src/background.rb&lang=ruby
-
-+++
-
-```ruby
-class Parser
-  def self.parse(csv_file)
-    ...
-  end
-end
-
-class Loader
-  def self.load!(parsed_data)
-    ...
-  end
-end
-```
+- Pipeline as code
+- DevOps Jenkins
+- JobDSL pipeline
+- Jenkinsfile pipeline
+- EVE-Jenkins-Pipeline (shared library)
 
 ---
 
-### Stubs
+### Pipeline as code
 
-```ruby
-describe '#process' do
-  it 'returns a successful Result object' do
-    processor = Processor.new
-
-    result = processor.process('test_file.csv')
-
-    expect(result.successful?).to eq(true)
-  end
-end
-```
-
-No stubs in place. Object and it's tests are tightly _coupled_ to it's dependencies
+Defining the deployment pipeline through code as opposed to manually configuring things via a GUI
 
 +++
 
-```ruby
-describe '#process' do
-  it 'returns a successful Result object' do
-    parser    = double('parser')
-    loader    = double('loader')
-    processor = Processor.new(parser: parser, loader: loader)
-    allow(parser).to receive(:parse).and_return('PARSED')
-    allow(loader).to receive(:load!).and_return(Result.new(:success))
+### Benefits
 
-    result = processor.process('test_file.csv')
+@ul
 
-    expect(result.successful?).to eq(true)
-  end
-end
-```
+- Reproducibility (tear down, redeploy)
+- Automated
+- Less manual effort = less human error
 
-@[3-4](Using RSpec's `double` method as a stand in Object)
-@[6-7](_Stubbing_ our collaborators internal implementation with our test doubles)
+@ulend
+
++++
+
+### Repos to pull down and clone
+
+@ul
+
+- uscis-jenkins
+- eve-jenkins-pipeline
+- uscis-pipeline-gem
+
+@ulend
 
 ---
 
-Stubs are great for QUERY methods
-But they don't suffice for COMMAND methods
+### USCIS-Jenkins
+
+- Cookbooks and scripts to create Jenkins servers
+- Used by ENR, Save, SVS, VDM
 
 +++
 
-```ruby
-def process(csv_file)
-  begin
-    parsed = parser.parse(csv_file)
-    loader.load!(parsed)
+### Gotcha:
 
-    Result.new(:success)
-  rescue ActiveRecord::RecordInvalid => invalid
-    Result.new(:failed, invalid.record.errors)
-  end
-end
-```
-
-@[1-2, 5-10](Using stubs our test would still pass if we removed these two lines!)
+This repo is sort of meta.
 
 +++
 
-What should we do instead?
+#### The main script will create a @color[orange](__DevOps Jenkins__) server that hosts the pipeline jobs that create:
+
+- Other Jenkins Servers such as (ENR Jenkins, PROD ENR Jenkins, Save Jenkins, etc.)
+- Another instance of itself - why would you want this?
 
 ---
 
-### Mocks
+### What happens when you trigger a DevOps-Jenkins build?
 
-```ruby
-describe '#process' do
-  it 'returns a successful Result object' do
-    parser    = double('parser')
-    loader    = double('loader')
-    processor = Processor.new(parser: parser, loader: loader)
-    expect(parser).to receive(:parse).and_return('PARSED')
-    expect(loader).to receive(:load!).and_return(Result.new(:success))
++++
 
-    result = processor.process('test_file.csv')
+#### 1. create-jenkins-for-devops
 
-    expect(result.successful?).to eq(true)
-  end
-end
+- Note: `JENKINS_SEEDSET`
+- Executes this command:
+
+```sh
+. rvm.env; bundle install; jobs/scripts/create-jenkins-instance.sh
+```
++++
+
+#### 2. jobs/scripts/create-jenkins-instance.sh
+
+```sh
+JENKINS_SEEDSET="${JENKINS_SEEDSET:-devops}"
+
+aws cloudformation create-stack \
+  --stack-name $cfn_stack_name \
+  --template-body file:///tmp/jenkins-asg-cfn.json \
+  --region $region \
+  --capabilities="CAPABILITY_IAM" \
+  --disable-rollback \
+  --parameters \
+    ...redacted...
+    ParameterKey=jenkinsPrefix,ParameterValue="$jenkins_prefix" \
+    ParameterKey=jenkinsKeyBucket,ParameterValue="$jenkins_key_bucket" \
+    ParameterKey=JenkinsSeedset,ParameterValue="$JENKINS_SEEDSET" \
+    ...redacted...
+  --tags \
+    Key=Server_Function,Value="Jenkins"
 ```
 
-@[3-4](Still using the same Doubles)
-@[6-7](A mock is just like a stub, except that it doesn't just allow methods to be invoked; it expects it.)
+@[1, 13](Creates a jenkins cloudformation stack that knows our JenkinsSeedset parameter value)
 
 +++
 
-stubs = allow
+#### 3. cookbooks/jenkins-config/attributes/seeds.rb
 
-mocks = expect
-
-+++
-
-Is Loading into a Database a Command or a Query? How does this affect whether or not we should use a stub vs mock?
-
-+++
-
-Downside: Mocks muddle up our tests by setting expectations out of order
-
-+++
-
-```ruby
-describe '#process' do
-  it 'returns a successful Result object' do
-    parser    = double('parser')
-    loader    = double('loader')
-    processor = Processor.new(parser: parser, loader: loader)
-    expect(parser).to receive(:parse).and_return('PARSED')
-    expect(loader).to receive(:load!).and_return(Result.new(:success))
-
-    result = processor.process('test_file.csv')
-
-    expect(result.successful?).to eq(true)
-  end
-end
+```sh
+node.default['jenkins-config']['seedsets'] = {
+  'devops' => [
+    { 'name' => 'jenkins',
+      'repo' => 'git@git.uscis.dhs.gov:USCIS/uscis-jenkins.git',
+      'file' => 'jobs/dsl/jobdsl.groovy',
+      'command' => '. rvm.env;echo success' },
+  ]
+}
 ```
 
-@[3-5](Arrange)
-@[9](Act)
-@[11](Assert)
-@[6-7](Arrange/Assert/Both?/WTH!?)
+@[2](JENKINS_SEEDSET = 'devops')
+@[3-6](Jenkins seedset that creates jobs)
+@[5](Filepath of the script to execute)
 
----
++++
 
-### Spies
+#### 4. jobs/dsl/jobdsl.groovy
 
-```ruby
-describe '#process' do
-  it 'returns a successful Result object' do
-    parser    = double('parser')
-    loader    = double('loader')
-    processor = Processor.new(parser: parser, loader: loader)
-    allow(parser).to receive(:parse).and_return('PARSED')
-    allow(loader).to receive(:load!).and_return(Result.new(:success))
+```groovy
+// Define list for create jenkins and misc jobs
+def createJenkinsJobNames = ["svs", "vdm", "enr", "devops", "sharedtest", "save", "prod"] as String[]
 
-    result = processor.process('test_file.csv')
-
-    expect(parser).to have_received(:parse).with('test_file.csv')
-    expect(loader).to have_received(:load!)
-    expect(result.successful?).to eq(true)
-  end
-end
+// Create Standalone Jobs for Jenkins Instance Creations and other Misc jobs
+createJenkinsJobNames.each { jobName ->
+  job("create-jenkins-for-${jobName}") { jobContext ->
+    JobSetup.create_jenkins_jobs(jobContext, "${jobName}")
+  }
+}
 ```
 
-@[3-7](Arrange)
-@[9](Act)
-@[11-13](Assert)
-@[6-7, 11-12](Spy)
+@[2](Array of all the different Jenkins we want to create)
+@[5-9](Executes `create-jenkins-instance.sh` under the hood with dynamic JENKINS_SEEDSET)
 
 +++
 
-Spies are ALSO stubs. They just also have an explicit expectation.
-
-+++
-
-Benefits of Spies:
-
-- Tests are organized clearly in Arrange, Act, Assert <!-- .element: class="fragment" -->
-- Easier to understand <!-- .element: class="fragment" -->
-- Easier to extract repeated Arrange steps <!-- .element: class="fragment" -->
-
-Downsides of Spies: <!-- .element: class="fragment" -->
-
-- Some duplication (overcome this by extraction) <!-- .element: class="fragment" -->
-
-+++
-
-```ruby
-describe '#process' do
-  it 'returns a successful Result object' do
-    parser    = stubbed_parser
-    loader    = stubbed_loader
-    processor = Processor.new(parser: parser, loader: loader)
-
-    result = processor.process('test_file.csv')
-
-    expect(parser).to have_received(:parse).with('test_file.csv')
-    expect(loader).to have_received(:load!)
-    expect(result.successful?).to eq(true)
-  end
-end
-
-def stubbed_parser
-  parser = double('parser')
-  allow(parser).to receive(:parse).and_return('PARSED')
-  parser
-end
-
-def stubbed_loader
-  loader = double('losser')
-  allow(loader).to receive(:load!).and_return(Result.new(:success))
-  loader
-end
-```
-
----
-
-### Fakes
-
-Fake objects that totally replace an external system. e.g. FakeStripe, FakePCS, FakeNewRelic
-
-+++
-
-```ruby
-describe DecisionProcess do
-  describe '.decide' do
-    it 'fetches an account from PCS' do
-      account_id = '123'
-      allow(PCSClient)
-        .to receive(:fetch)
-        .with(account_id: account_id)
-        .and_return(FakePCSClient.fetch('123'))
-
-      result = DecisionProcess.decide(account_id: account_id)
-
-      expect(result).to eq(:success)
-    end
-  end
-end
-```
-
-@[5](Real client)
-@[8](Fake client)
-
-+++
-
-You don't need Fakes, you can just stub, spy, or mock everything. 
-
-But, they can be really useful for replacing a large dependency.
-
-+++
-
-Benefits of Fakes:
-
-- Clean solution for a dependency requiring a lot of the same mocks <!-- .element: class="fragment" -->
-
-Downsides of Fakes: <!-- .element: class="fragment" -->
-
-- A lot of code and maintenance required for when the real object changes <!-- .element: class="fragment" -->
-
----
-
-### But wait! There's more!
-
-+++
-
-```ruby
-describe '#process' do
-  it 'returns a successful Result object' do
-    parser = spy('parser')
-    loader = spy('loader')
-    processor  = Processor.new(parser: parser, loader: loader)
-
-    result = processor.process('test_file.csv')
-
-    expect(parser).to have_received(:parse).with('test_file.csv')
-    expect(loader).to have_received(:load!)
-    expect(result.successful?).to eq(true)
-  end
-end
-```
-
-@[3-4](#spy method added in RSpec 3.1. Spy automatically stubs all messages for that object)
-
-+++
-
-TLDR:
-
-- Query - return a result and do not alter application state (no side effects) <!-- .element: class="fragment" -->
-- Command - alters application state (send emails, alter DB, etc.) <!-- .element: class="fragment" -->
-
-+++
-
-TLDR CONT:
-
-- STUB: if your object under test is calling another object’s query method. You do not actually care if that query method is called as long as the object under test ultimately does what it should. <!-- .element: class="fragment" -->
-- SPY: if you want to ensure that a message was a received by an object. This is necessary when you are calling a command method. <!-- .element: class="fragment" -->
-- MOCKS: Eh, lean towards Spies as they don't break Arrange - Act - Assert. Spies used to add some code duplication but this is alleviated with code extraction or the new #spy method. <!-- .element: class="fragment" -->
+### META!
 
 ---
