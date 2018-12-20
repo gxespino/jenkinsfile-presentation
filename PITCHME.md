@@ -1,15 +1,13 @@
-### @color[orange](Jenkinsfile) - What, why, where, how
+### @color[orange](USCIS-Jenkins) - What, why, where, how
 (you too can write pipeline code!)
 
 ---
 
-### TIL (Background info):
+### TIL:
 
-- Pipeline as code
-- DevOps Jenkins
-- JobDSL pipeline
-- Jenkinsfile pipeline
-- EVE-Jenkins-Pipeline (shared library)
+- Where do our pipeline jobs originate?
+- What happens under the hood when you trigger a pipeline job?
+  - Connect the dots and pull back the curtain on our pipelines
 
 ---
 
@@ -43,6 +41,20 @@ Defining the deployment pipeline through code as opposed to manually configuring
 
 ---
 
+### Steps
+
+1. DevOps Jenkins
+2. Pipeline USCIS Jenkins - Create Instance
+3. JenkinsfileInstance
+   3a. create_instance.rake - jenkins_prefix
+4. Cloudformation - provisioning/jenkins_instance.yml
+   4a. JenkinsSeedset -> export SEEDSET -> jenkins_config[seedset]
+   4b. runlist -> recipe[jenkins-config::jobs]
+5. jenkins_config/recipes/jobs.rb
+6. jenkins_config/attributes/seeds.rb
+
+---
+
 ### USCIS-Jenkins
 
 - Cookbooks and scripts to create Jenkins servers
@@ -67,36 +79,15 @@ This repo is sort of meta.
 
 +++
 
-#### 1. create-jenkins-for-devops
+#### 1. uscis-jenkins-create-instance
 
-- Note: `JENKINS_SEEDSET`
-- Executes this command:
+- Note: `jenkins_prefix`
+- Executes this script: `JenkinsfileInstance`
 
-```sh
-. rvm.env; bundle install; jobs/scripts/create-jenkins-instance.sh
-```
 +++
 
-#### 2. jobs/scripts/create-jenkins-instance.sh
+#### 2. uscis-jenkins/JenkinsfileInstance
 
-```sh
-JENKINS_SEEDSET="${JENKINS_SEEDSET:-devops}"
-
-aws cloudformation create-stack \
-  --stack-name $cfn_stack_name \
-  --template-body file:///tmp/jenkins-asg-cfn.json \
-  --region $region \
-  --capabilities="CAPABILITY_IAM" \
-  --disable-rollback \
-  --parameters \
-    ...redacted...
-    ParameterKey=jenkinsPrefix,ParameterValue="$jenkins_prefix" \
-    ParameterKey=jenkinsKeyBucket,ParameterValue="$jenkins_key_bucket" \
-    ParameterKey=JenkinsSeedset,ParameterValue="$JENKINS_SEEDSET" \
-    ...redacted...
-  --tags \
-    Key=Server_Function,Value="Jenkins"
-```
 
 @[1, 13](Creates a jenkins cloudformation stack that knows our JenkinsSeedset parameter value)
 
